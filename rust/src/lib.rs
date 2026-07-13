@@ -1,0 +1,12 @@
+pub mod acf;
+pub mod autocorr;
+pub mod core;
+pub mod fusionchan;
+pub mod gray;
+pub mod kmeans;
+pub mod reconsearch;
+pub mod reconstruct;
+pub mod runlengths;
+pub mod selfsim;
+pub mod sigproc;
+pub mod varcontrast;
