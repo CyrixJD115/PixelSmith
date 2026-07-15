@@ -68,9 +68,14 @@ robust converter available:
 - **Handles what fixed grids can't.** Non-integer cell sizes, sub-pixel drift,
   warped and non-uniform grids, heavy anti-aliasing, and JPEG block artifacts
   are all first-class cases, not afterthoughts.
-- **Reconstruction that preserves detail.** Once the grid is known, cells are
-  pooled with border-aware, center-weighted sampling that resists the bleed
-  living at cell edges, keeping single-pixel outlines and rare local colors.
+- **Two-stage reconstruction: crisp structure, accurate color.** Once the grid
+  is known, the downscale decouples *placement* from *color*. A small adaptive
+  color quantization is used **only to decide structure** - each cell votes
+  among clean, flat quantized labels, so region boundaries and outlines come
+  out crisp instead of smeared. Each cell is then colored from the **original,
+  un-quantized pixels** that carry its winning label, so the final colors are
+  accurate and no real color (a rare highlight, a 1px accent) is ever clamped
+  away. This is how it gets snapper-clean lines without snapper's color loss.
 - **Verified and fast.** Every result is checked against a graded ground-truth
   benchmark. The Rust core is 11-24x faster than the reference at 2.5-4x lower
   memory, converting a typical image in well under a second.
@@ -81,8 +86,40 @@ There is a limit to what pure image processing can recover from a badly damaged
 image. For the hardest inputs, [the neural version](#the-neural-version) picks
 up where this leaves off.
 
+## Accuracy
+
+Measured with [pixel-bench](https://github.com/Retro-Diffusion/pixel-bench), an open
+benchmark that distorts native pixel art through 43 categories of real-world
+damage (fractional and non-square upscales, blur, JPEG, noise, grid drift,
+AI-upscaler mush, painterly fake-pixel texture, broken outlines, dead pixels,
+and more) and scores how well each tool recovers the original. Across 100 source
+images and 4,300 distorted inputs:
+
+![Benchmark: how well each tool rebuilds the pixel art, on exact native size, within one pixel, and grid alignment](docs/images/benchmark-accuracy.png)
+
+| Tool | Exact native size | Within 1 pixel | Grid alignment |
+|---|---|---|---|
+| **Pixel Art Fixer** | **77%** | **84%** | **94%** |
+| PixelDetector | 4% | 7% | 80% |
+| unfake.py | 3% | 8% | 67% |
+| PixelSnapper | 4% | 19% | 63% |
+| Naive baseline | 2% | 4% | 50% |
+
+Pixel Art Fixer recovers the exact native resolution on 77% of images, where no
+other tool clears 5%, and its detected grid lines sit on the true grid 94% of
+the time. When it gets the size right, its colours land within a mean CIELAB
+difference of about 1.6 (barely perceptible). It leads all 43 distortion
+categories, from clean integer upscales through heavy mush, painterly fakes,
+broken outlines, and even the deliberately extreme "kitchen sink" that stacks
+every kind of damage at once. For inputs damaged past what any grid detector can
+recover, [the neural version](#the-neural-version) takes over.
+
+Full methodology, per-category tables, and reproduction instructions live in the
+[pixel-bench](https://github.com/Retro-Diffusion/pixel-bench) repo.
+
 ## Table of contents
 
+- [Accuracy](#accuracy)
 - [Usage](#usage)
   - [Python](#python)
   - [Rust](#rust)
@@ -300,25 +337,36 @@ Detection is consensus-first, in layers:
 
 `fast` mode runs only step 1 and the cheap detectors, for bounded latency.
 
-### Reconstruction
+### Reconstruction — two-stage packing (`two_stage_pack`)
 
-Given the grid, reconstruction produces the native image:
+Given the grid (`cols` x `rows`), reconstruction packs the source down to one
+true pixel per cell. The key idea is to **decouple structure from color**, which
+is what gets clean lines *and* accurate colors at the same time:
 
 ![Zoomed detail: mushy off-grid input versus one true pixel per cell](docs/images/pixel-detail.png)
 
-1. **Phase solve.** Estimate the grid origin per axis from an edge comb, falling
-   back to a variance-minimizing phase sweep when the image is too mushy for a
-   comb.
-2. **Cut placement.** Generate candidate cell boundaries (snapped to gradient
-   maxima, phase-lattice, and plain lattice) and pick, per axis, the set that
-   minimizes within-cell variance.
-3. **Warp refinement.** Allow per-band non-uniform cuts for warped grids, but
-   adopt them only when they measurably reduce within-cell variance, so straight
-   grids are left untouched.
-4. **Color pooling.** Sample each cell with triangular center weighting (mush,
-   anti-aliasing, and JPEG bleed all live at cell borders) plus a crisp center
-   sample, preserving single-pixel outlines and rare local colors a global
-   codebook would erase.
+1. **Regular even grid.** With the native size known, the true cell boundaries
+   are just an even lattice (`x * cols / w`). No per-cut snapping: snapping to
+   local gradients chases *content* edges on detailed art and produces sliver /
+   double-wide cells, so it is dropped entirely.
+2. **Adaptive quantization (structure only).** The image is k-means quantized to
+   an adaptive number of colors `K` (`adaptive_k`: coarse color-complexity of
+   the image, clamped to `[16, 48]`). This palette is used *only* to decide
+   placement, never for output.
+3. **Stage 1 - placement.** Each cell takes a center-weighted vote over the
+   clean quantized **labels**. Because the vote is between flat, unambiguous
+   colors (not the blurred ramp values in the raw image), region boundaries and
+   outlines land crisp instead of smeared. This is the mechanism behind
+   pixel-snapper's clean lines.
+4. **Stage 2 - color.** Each cell is colored from a center-weighted mean of the
+   **original, un-quantized pixels that carry its winning label**. The color is
+   therefore accurate and denoised from the real image, and rare colors survive
+   - a boundary cell picks "outline" cleanly, then gets the *true* outline color
+   rather than a blend or a palette-clamped approximation.
+
+The legacy grid-cut reconstructor (`reconstruct`, phase solve + snapped cuts +
+warp refinement + mode pooling) is kept as an opt-out (`two_stage=False` /
+`legacy`) but is no longer the default.
 
 ### Why this beats naive methods
 

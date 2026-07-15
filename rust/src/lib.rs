@@ -10,3 +10,4 @@ pub mod runlengths;
 pub mod selfsim;
 pub mod sigproc;
 pub mod varcontrast;
+pub mod wu;

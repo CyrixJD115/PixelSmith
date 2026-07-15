@@ -1,4 +1,4 @@
-//! Shift self-similarity grid detection. Mirrors pixelfixer/selfsim.py.
+//! Shift self-similarity grid detection. Mirrors detector/selfsim.py.
 //!
 //! The "quant" feature is weight-0 in the reference (ablated) and is not
 //! ported. `_phase` is skipped too: no caller consumes selfsim's phase.

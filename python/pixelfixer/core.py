@@ -1,4 +1,4 @@
-"""pixelfixer detector core: consensus-first ensemble of four detection methods.
+"""pixelfixer detector core: consensus-first ensemble of four method prototypes.
 
 autocorr (banded ACF, 17/26), runlengths (boundary combs, 17/26),
 fusion (sum-fused channels, 17/26), selfsim (shift dissimilarity, 16/26)

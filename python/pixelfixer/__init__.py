@@ -1,8 +1,8 @@
-"""pixelfixer - grid detection for converting fake pixel art into true pixel art.
+"""pixelfixer detector - final consolidated grid detector.
 
 detect(rgba) -> dict(step_x, step_y, cols, rows, phase_x, phase_y, consensus)
 
-Architecture (see docs/HOW_IT_WORKS.md for the full technical documentation):
+Architecture (see KNOWLEDGE.md for the full campaign that produced it):
   1. three cheap phase-free detectors run first:
        autocorr    - banded-ACF comb-anticomb + peak-train LS refinement
        runlengths  - multi-lag boundary-distance combs

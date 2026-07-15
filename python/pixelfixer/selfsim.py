@@ -1,4 +1,4 @@
-"""Shift self-similarity grid detection.
+"""Shift self-similarity grid detection prototype.
 
 Core signal: for a pixel grid with cell size s, the dissimilarity curve
     d(t) = mean |F(x) - F(x+t)|      (per axis)

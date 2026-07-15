@@ -540,7 +540,60 @@ some ambiguities cannot cross the ensemble boundary:
 
 ---
 
-## 6. Precision — why refinement is separate from selection
+## 6. Reconstruction — two-stage packing (`reconstruct.py::two_stage_pack`)
+
+Detection is the hard part; reconstruction (collapsing the source to one true
+pixel per detected cell) is where the *output* is won or lost. The central
+lesson, learned the hard way, is that **structure and color must be decided
+separately**.
+
+The failure of the obvious approach — pool each cell and take a color — is that
+a boundary cell contains blend/ramp pixels (the anti-aliased transition between
+two real colors). Vote over those raw pixels and the cell picks a muddy
+intermediate, so outlines smear and single pixels jut out of otherwise-straight
+lines. Pixel-snapper avoids this by k-means quantizing the whole image to ~16
+flat colors *before* pooling, so every vote is between clean colors — but that
+throws real colors away (a rare highlight, a 1px accent) and is the weakest part
+of that tool.
+
+Two-stage packing keeps snapper's crisp lines without the color loss:
+
+1. **Regular even grid.** Once the native size `cols × rows` is known, the true
+   cell boundaries are just an even lattice (`x·cols/w`). Per-cut snapping to
+   gradient maxima is *dropped* — on detailed art the strong gradients are
+   content edges (fur, book spines, banner patterns), not pixel boundaries, and
+   snapping to them cascades into sliver and double-wide cells.
+2. **Adaptive structure quantization** (`adaptive_k`). The image is quantized to
+   `K` colors where `K` is the coarse (4-bit) color complexity of the opaque
+   pixels, clamped to `[16, 48]`. Because this palette only ever decides
+   *placement*, it should be generous — simple sprites land near 16, complex art
+   caps at 48, and more labels never cost color fidelity.
+3. **Stage 1 — placement.** Each cell casts a center-weighted vote over the
+   quantized **labels**. The vote is between flat, unambiguous colors, so region
+   boundaries and outlines land crisp instead of smeared. The label decides
+   which region the cell belongs to, and nothing else.
+4. **Stage 2 — color.** Each cell is colored by a center-weighted mean of the
+   **original, un-quantized pixels that carry its winning label**. Blend pixels
+   from the neighboring region are excluded (they carry the other label), so the
+   color is accurate, denoised from the real image, and never palette-clamped: a
+   boundary cell picks "outline" cleanly (stage 1) and then gets the *true*
+   outline color (stage 2).
+
+On the 200-image internal sweep this beats the legacy pooling reconstructor on
+mean color error (4.56 vs 5.51), with the largest gains on the geometric
+distortions (grid blocks, warp, mush) where the even grid avoids the cascade.
+It runs in ~0.02–0.1 s in the Rust core.
+
+The legacy grid-cut reconstructor (`reconstruct`: phase solve → snapped/warped
+cuts → center-weighted mode pooling, §10 provenance) is retained as the
+`two_stage=False` / `legacy` opt-out for A/B and the phase-locked synthetic
+case, but is no longer the default. A final palette-clamp to a clean flat
+palette is deliberately left as future work — the two-stage output keeps every
+original color on purpose.
+
+---
+
+## 7. Precision — why refinement is separate from selection
 
 A recurring, load-bearing fact: **the comb score is razor-thin in step-space**,
 about `2/n_cells` px wide. A 0.02 px step error accumulates to a full
@@ -568,7 +621,7 @@ Therefore selection and precision are two separate stages everywhere:
 
 ---
 
-## 7. JPEG hygiene
+## 8. JPEG hygiene
 
 ![JPEG 8x8 blocking creates a competing 8px lattice alongside the real art grid](images/jpeg-lattice.png)
 
@@ -597,7 +650,7 @@ residual breaks that tie, though its margin is thin (0.260 vs 0.254 on
 
 ---
 
-## 8. Performance model
+## 9. Performance model
 
 | path | cost | dominated by |
 |---|---|---|
@@ -623,7 +676,7 @@ target for the port.
 
 ---
 
-## 9. Known limitations (honest)
+## 10. Known limitations (honest)
 
 - **Extreme jitter / no boundary lattice.** The cottage: dense mush puts a
   gradient boundary every ~2.6 px and the ~8 px pseudo-cells are so warped that
@@ -655,7 +708,7 @@ target for the port.
 
 ---
 
-## 10. Provenance
+## 11. Provenance
 
 The detector distils a multi-method development effort and four reference works.
 

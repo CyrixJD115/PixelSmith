@@ -1,7 +1,7 @@
 //! Reconstruction-search ("distillability") channel, trimmed to what
 //! core.py's arbitration uses: _prep, AxisData with nbc=1 energies,
 //! _s_grid[::3] coarse curves, _trend_fn, eval_s and _score.
-//! Mirrors pixelfixer/reconsearch.py.
+//! Mirrors detector/reconsearch.py.
 
 use crate::kmeans::{even_sample, kmeans};
 use crate::sigproc::{interp, median};

@@ -79,7 +79,7 @@ fn main() {
                 Err(e) => fail(&format!("cannot open image: {}", e)),
             };
             let (w, h) = (img.width() as usize, img.height() as usize);
-            // server input caps (mirror pixelfixer/api.py)
+            // server input caps (mirror detector/api.py)
             if w.min(h) < 16 {
                 fail("image too small (min side 16px)");
             }
@@ -95,10 +95,19 @@ fn main() {
             };
             let detect_s = t0.elapsed().as_secs_f64();
             let t0 = std::time::Instant::now();
-            let r = reconstruct::reconstruct(
-                img.as_raw(), w, h, d.step_x, d.step_y,
-                d.cols as usize, d.rows as usize, false,
-            );
+            // default: two-stage packing (quantise-for-structure +
+            // original-pixels-for-colour, adaptive K). Pass "legacy" for the
+            // old mode-vote reconstruction.
+            let r = if args.iter().any(|s| s == "legacy") {
+                reconstruct::reconstruct(
+                    img.as_raw(), w, h, d.step_x, d.step_y,
+                    d.cols as usize, d.rows as usize, false, false,
+                )
+            } else {
+                reconstruct::two_stage_pack(
+                    img.as_raw(), w, h, d.cols as usize, d.rows as usize, 0,
+                )
+            };
             let recon_s = t0.elapsed().as_secs_f64();
             let buf = match image::RgbaImage::from_raw(r.cols as u32, r.rows as u32, r.rgba) {
                 Some(b) => b,
@@ -122,10 +131,13 @@ fn main() {
             let rows: usize = args[6].parse().unwrap();
             let out_path = &args[7];
             let dark = args.get(8).map(|s| s == "dark").unwrap_or(false);
+            // low-level primitive: raw (un-quantized) by default so the
+            // verify harness stays exact; pass "palette" to enable auto_palette
+            let auto_palette = args.iter().any(|s| s == "palette");
             let img = image::open(path).unwrap().to_rgba8();
             let (w, h) = (img.width() as usize, img.height() as usize);
             let t0 = std::time::Instant::now();
-            let r = reconstruct::reconstruct(img.as_raw(), w, h, sx, sy, cols, rows, dark);
+            let r = reconstruct::reconstruct(img.as_raw(), w, h, sx, sy, cols, rows, dark, auto_palette);
             let dt = t0.elapsed().as_secs_f64();
             let buf = image::RgbaImage::from_raw(r.cols as u32, r.rows as u32, r.rgba)
                 .expect("size");

@@ -1,9 +1,9 @@
 """Command-line interface for the pixelfixer detector.
 
-  python -m pixelfixer.cli input.png                 # print detection JSON
-  python -m pixelfixer.cli input.png --overlay g.png # save grid overlay
-  python -m pixelfixer.cli input.png --extract e.png # save reconstruction
-  python -m pixelfixer.cli somefolder --json out.json
+  python -m detector.cli input.png                 # print detection JSON
+  python -m detector.cli input.png --overlay g.png # save grid overlay
+  python -m detector.cli input.png --extract e.png # save reconstruction
+  python -m detector.cli somefolder --json out.json
 """
 import argparse
 import glob
@@ -16,7 +16,7 @@ import numpy as np
 from PIL import Image
 
 sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
-from pixelfixer import detect
+from detector import detect
 
 
 def _overlay(rgba, r):
@@ -31,10 +31,35 @@ def _overlay(rgba, r):
 
 
 def _extract(rgba, r, dark_stroke=False):
-    from pixelfixer.reconstruct import reconstruct
+    from detector.reconstruct import reconstruct
     return reconstruct(rgba, r["step_x"], r["step_y"], r["cols"], r["rows"],
                        color="mode", palette_snap=False,
                        dark_stroke=dark_stroke)
+
+
+def _extract_legacy(rgba, r):
+    from detector.quantize import kmeans_quantize
+    h, w = rgba.shape[:2]
+    cols, rows = r["cols"], r["rows"]
+    _q, labels, centers = kmeans_quantize(rgba, k=24)
+    ix = np.minimum((np.arange(w) / r["step_x"]).astype(np.int64), cols - 1)
+    iy = np.minimum((np.arange(h) / r["step_y"]).astype(np.int64), rows - 1)
+    cell = iy[:, None] * cols + ix[None, :]
+    kk = centers.shape[0]
+    counts = np.bincount(cell.reshape(-1) * kk + labels.reshape(-1),
+                         minlength=cols * rows * kk)
+    best = counts.reshape(cols * rows, kk).argmax(axis=1)
+    out = np.clip(np.rint(centers[best]), 0, 255).astype(np.uint8)
+    out = out.reshape(rows, cols, 3)
+    if rgba.shape[2] == 4:
+        a = (rgba[:, :, 3] > 127).astype(np.float64)
+        asum = np.bincount(cell.reshape(-1), weights=a.reshape(-1),
+                           minlength=cols * rows)
+        atot = np.maximum(np.bincount(cell.reshape(-1),
+                                      minlength=cols * rows), 1)
+        mask = (asum / atot > 0.5).reshape(rows, cols)
+        out = np.dstack([out, (mask * 255).astype(np.uint8)])
+    return out
 
 
 def main():

@@ -1,4 +1,4 @@
-//! Consensus core. Mirrors pixelfixer/core.py: the fast mode (ac + rl with
+//! Consensus core. Mirrors detector/core.py: the fast mode (ac + rl with
 //! the calibrated early exit, selfsim on disagreement) and the full mode
 //! (stage-1 supermajority consensus over four voters, stage-2 arbitration
 //! over fused evidence + square-packer + distillability).

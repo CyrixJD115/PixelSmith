@@ -1,12 +1,16 @@
-"""Sum-fused evidence channels for grid arbitration.
+"""Fusion prototype: instrument every periodicity channel in pixelfixer.grid
+on a common candidate-step ladder, dump the per-(image, axis, step) score
+table, learn/derive an interpretable fusion rule, and run the bench with it.
 
-When the three cheap Stage-1 detectors disagree, the detector arbitrates per
-axis over a fused evidence curve built here. Each channel measures periodicity
-a different way; the fused score is an equal-weight sum of the per-scan
-max-normalized channels that rank the true step best on graded data
-("core4": ray_e1, tile_e1, tile_e2, spec_e1).
+Modes
+-----
+    python tools/methods/fusion.py --extract   # dump channel table (CSV)
+    python tools/methods/fusion.py --analyze   # per-channel ranking stats +
+                                               # logistic/tree fusion search
+    python tools/methods/fusion.py             # run the bench harness
 
-Channels recorded per (axis, step):
+Channels recorded per (axis, step)
+----------------------------------
     comb_e1  comb z on pooled E1 (quantized-image edge profile)
     comb_e2  comb z on pooled E2 (original-image curvature profile)
     ray_e1   Rayleigh peak coherence on E1
@@ -17,8 +21,13 @@ Channels recorded per (axis, step):
     tile_e2  2D-tile Rayleigh (original curvature map)
     spec_e1  Welch spectral z (quantized gradient map)
     spec_e2  Welch spectral z (original curvature map)
-    vc       within-cell variance contrast (square cells; same for both axes)
+    vc       CellVarContrast detrended z (square cells; same for both axes)
 """
+
+import json
+import math
+import os
+import sys
 
 import numpy as np
 
@@ -35,6 +44,8 @@ CHANNELS = ["comb_e1", "comb_e2", "ray_e1", "ray_e2",
             "band_e1", "band_e2", "tile_e1", "tile_e2",
             "spec_e1", "spec_e2", "vc"]
 
+OUT_DIR = os.path.join(os.getcwd(), "out", "progress", "methods", "fusion")
+TABLE_CSV = os.path.join(OUT_DIR, "channel_table.csv")
 
 
 def ladder(lo: float = 2.0, hi: float = 64.0, ratio: float = 1.03):
@@ -175,6 +186,162 @@ ACTIVE_CHANNELS = None  # filled after WEIGHTS below
 
 # ------------------------------------------------------------- extraction
 
+def _image_class(path: str) -> str:
+    name = os.path.basename(path).lower()
+    for tag in ("clean", "bilinear", "bicubic", "jpeg", "shuffle_hard",
+                "shuffle", "warp", "kitchen_sink", "noisy_blur",
+                "mush_heavy", "blocks_mush", "drift_mush", "ai_soup",
+                "rowjit", "mush"):
+        if tag in name:
+            return tag
+    return "real"
+
+
+def extract_table():
+    """Resumable extraction: one CSV part per image, then concatenate."""
+    import pandas as pd
+    from tools.bench_common import KNOWN, REVIEW, load
+
+    parts_dir = os.path.join(OUT_DIR, "table_parts")
+    os.makedirs(parts_dir, exist_ok=True)
+    steps = ladder()
+    parts = []
+    for entry in ([(p, tc, tr) for p, tc, tr, _tol in KNOWN]
+                  + [(p, None, None) for p in REVIEW]):
+        path, tc, tr = entry
+        full = os.path.join(ROOT, path)
+        if not os.path.exists(full):
+            continue
+        stem = os.path.splitext(os.path.basename(path))[0][:48]
+        part_csv = os.path.join(parts_dir, stem + ".csv")
+        if os.path.exists(part_csv):
+            parts.append(part_csv)
+            print(f"cached    {path}", flush=True)
+            continue
+        img = load(path)
+        h, w = img.shape[:2]
+        import time
+        t0 = time.time()
+        ev = build_evidence(img)
+        cls = _image_class(path)
+        rows = []
+        for axis, extent, tcells in (("x", w, tc), ("y", h, tr)):
+            true_step = extent / tcells if tcells else None
+            mat = channel_matrix(ev, axis, steps)
+            for i, s in enumerate(steps):
+                rec = {"image": os.path.basename(path), "cls": cls,
+                       "axis": axis, "extent": extent, "step": s,
+                       "true_step": true_step,
+                       "rel": (s / true_step) if true_step else None,
+                       "is_true": (abs(s - true_step) / true_step <= 0.03)
+                                  if true_step else None}
+                rec.update({c: mat[i, j] for j, c in enumerate(CHANNELS)})
+                rows.append(rec)
+        pd.DataFrame(rows).to_csv(part_csv, index=False)
+        parts.append(part_csv)
+        print(f"extracted {path}  ({time.time()-t0:.1f}s)", flush=True)
+    df = pd.concat([pd.read_csv(p) for p in parts], ignore_index=True)
+    df.to_csv(TABLE_CSV, index=False)
+    print(f"wrote {TABLE_CSV}  ({len(df)} rows)", flush=True)
+
+
+# ------------------------------------------------------------- analysis
+
+def analyze():
+    import pandas as pd
+    df = pd.read_csv(TABLE_CSV)
+    known = df[df["true_step"].notna()].copy()
+
+    print("=== per-channel ranking of the true step (known images) ===")
+    print("channel: median rank of best true-step row within its axis scan "
+          "(1 = channel's argmax is the true step); top1 = fraction of "
+          "(image, axis) scans where argmax is within 3% of truth\n")
+    stats = []
+    groups = list(known.groupby(["image", "axis"]))
+    for c in CHANNELS:
+        ranks, top1, top1_harm = [], 0, 0
+        for (im, ax), g in groups:
+            v = g[c].to_numpy()
+            if v.max() <= 0:
+                ranks.append(len(g))
+                continue
+            order = np.argsort(-v)
+            true_rows = np.where(g["is_true"].to_numpy())[0]
+            if len(true_rows) == 0:
+                continue
+            best_rank = min(np.where(np.isin(order, true_rows))[0]) + 1
+            ranks.append(best_rank)
+            top1 += int(order[0] in true_rows)
+            rel = g["rel"].to_numpy()[order[0]]
+            mult = rel / np.round(rel) if np.round(rel) >= 1 else np.inf
+            top1_harm += int(abs(rel - round(rel)) <= 0.05 * max(rel, 1)
+                             and round(rel) >= 1)
+        stats.append((c, float(np.median(ranks)), top1 / len(groups),
+                      top1_harm / len(groups)))
+        print(f"  {c:8s} med_rank {np.median(ranks):5.1f}  "
+              f"top1 {top1 / len(groups):.2f}  top1_or_multiple "
+              f"{top1_harm / len(groups):.2f}")
+
+    print("\n=== per-class channel top1 ===")
+    for cls, gcls in known.groupby("cls"):
+        parts = []
+        for c in CHANNELS:
+            t = 0
+            n = 0
+            for (im, ax), g in gcls.groupby(["image", "axis"]):
+                v = g[c].to_numpy()
+                true_rows = np.where(g["is_true"].to_numpy())[0]
+                if len(true_rows) == 0 or v.max() <= 0:
+                    n += 1
+                    continue
+                t += int(np.argmax(v) in true_rows)
+                n += 1
+            parts.append(f"{c}:{t}/{n}")
+        print(f"  {cls:14s} " + "  ".join(parts))
+
+    # ---- learned fusion: logistic regression on per-scan-normalized scores
+    print("\n=== logistic regression (per-scan max-normalized channels) ===")
+    from sklearn.linear_model import LogisticRegression
+    from sklearn.tree import DecisionTreeClassifier, export_text
+
+    X, y = [], []
+    for (im, ax), g in known.groupby(["image", "axis"]):
+        m = g[CHANNELS].to_numpy()
+        norm = m / np.maximum(m.max(axis=0, keepdims=True), 1e-9)
+        norm = np.clip(norm, 0, None)
+        X.append(norm)
+        y.append(g["is_true"].to_numpy().astype(int))
+    X = np.vstack(X)
+    y = np.concatenate(y)
+    lr = LogisticRegression(max_iter=2000, class_weight="balanced")
+    lr.fit(X, y)
+    for c, w in sorted(zip(CHANNELS, lr.coef_[0]), key=lambda t: -abs(t[1])):
+        print(f"  {c:8s} {w:+.2f}")
+    print(f"  intercept {lr.intercept_[0]:+.2f}")
+
+    # per-scan argmax accuracy of the LR score
+    correct = 0
+    total = 0
+    for (im, ax), g in known.groupby(["image", "axis"]):
+        m = g[CHANNELS].to_numpy()
+        norm = m / np.maximum(m.max(axis=0, keepdims=True), 1e-9)
+        score = norm @ lr.coef_[0]
+        true_rows = np.where(g["is_true"].to_numpy())[0]
+        if len(true_rows) == 0:
+            continue
+        correct += int(np.argmax(score) in true_rows)
+        total += 1
+    print(f"  LR argmax accuracy: {correct}/{total}")
+
+    print("\n=== decision tree (depth 3) ===")
+    dt = DecisionTreeClassifier(max_depth=3, class_weight="balanced",
+                                min_samples_leaf=20)
+    dt.fit(X, y)
+    print(export_text(dt, feature_names=CHANNELS))
+
+
+# ------------------------------------------------------------- detection
+
 # Fusion rule (from --analyze + fuse_search on the channel table):
 # equal-weight sum of per-scan max-normalized {ray_e1, tile_e1, tile_e2,
 # spec_e1}. This "core4" reaches 36/40 scan-argmax accuracy on knowns vs 32
@@ -194,9 +361,22 @@ RESCORE_WEIGHTS = dict(WEIGHTS)
 ACTIVE_CHANNELS = [c for c in CHANNELS if WEIGHTS.get(c, 0.0) > 0.0]
 RESCORE_WEIGHTS.update({"band_e1": 1.0, "band_e2": 1.0})
 
-def _channel_matrices(ev, steps):
-    """Channel score matrices for both axes over the candidate-step ladder."""
-    return channel_matrix(ev, "x", steps), channel_matrix(ev, "y", steps)
+CACHE_DIR = os.path.join(OUT_DIR, "cache")
+
+
+def _cached_matrices(rgba, ev, steps):
+    """Channel matrices for both axes, cached on disk by image content."""
+    import hashlib
+    os.makedirs(CACHE_DIR, exist_ok=True)
+    key = hashlib.md5(rgba.tobytes()).hexdigest()[:16]
+    path = os.path.join(CACHE_DIR, f"{key}_{len(steps)}.npz")
+    if os.path.exists(path):
+        d = np.load(path)
+        return d["mx"], d["my"]
+    mx = channel_matrix(ev, "x", steps)
+    my = channel_matrix(ev, "y", steps)
+    np.savez_compressed(path, mx=mx, my=my)
+    return mx, my
 
 
 def fused_curve(mat: np.ndarray) -> np.ndarray:
@@ -347,7 +527,7 @@ def detect(rgba: np.ndarray) -> dict:
     h, w = rgba.shape[:2]
     ev = build_evidence(rgba)
     all_steps = np.array(ladder())
-    mx, my = _channel_matrices(ev, all_steps)
+    mx, my = _cached_matrices(rgba, ev, all_steps)
 
     results = {}
     for axis, extent, mat in (("x", w, mx), ("y", h, my)):
@@ -413,3 +593,10 @@ def detect(rgba: np.ndarray) -> dict:
         "candidates": [(float(s), float(c)) for s, c in cands],
     }
 
+
+if __name__ == "__main__" and "--extract" in sys.argv:
+    extract_table()
+    sys.exit(0)
+if __name__ == "__main__" and "--analyze" in sys.argv:
+    analyze()
+    sys.exit(0)

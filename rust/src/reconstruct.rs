@@ -1,5 +1,5 @@
 //! Reconstruction: detected grid -> native-resolution pixel art.
-//! Mirrors pixelfixer/reconstruct.py (color="mode" path; palette_snap is not
+//! Mirrors detector/reconstruct.py (color="mode" path; palette_snap is not
 //! ported - the server API default is palette_snap=False).
 
 use rayon::prelude::*;
@@ -455,6 +455,7 @@ pub fn reconstruct(
     cols: usize,
     rows: usize,
     dark_stroke: bool,
+    auto_palette: bool,
 ) -> ReconOut {
     let sat = Sat::new(rgba, w, h);
 
@@ -735,6 +736,27 @@ pub fn reconstruct(
         }
     }
 
+    // OPTIMAL PALETTE: snap the (structurally correct but color-muddy) mode
+    // output onto a small Wu palette. K is detected on this already-denoised
+    // 1x output (reliable), so soft AA boundary cells collapse onto real
+    // pixel-art colors: crisp detail + a flat palette. See detector/wu.py.
+    if auto_palette {
+        let wpx: Vec<[u8; 3]> = (0..n)
+            .map(|ci| {
+                [
+                    pyround(out[ci][0] * 255.0).clamp(0.0, 255.0) as u8,
+                    pyround(out[ci][1] * 255.0).clamp(0.0, 255.0) as u8,
+                    pyround(out[ci][2] * 255.0).clamp(0.0, 255.0) as u8,
+                ]
+            })
+            .collect();
+        let k = crate::wu::elbow_color_count(&wpx, 64);
+        let (pal, labels) = crate::wu::quantize(&wpx, k);
+        for ci in 0..n {
+            out[ci] = pal[labels[ci]];
+        }
+    }
+
     // alpha: majority of pixels with a > 127
     let mut asum = vec![0f64; n];
     for i in 0..w * h {
@@ -752,4 +774,116 @@ pub fn reconstruct(
         out_rgba[ci * 4 + 3] = if asum[ci] / cnt[ci] > 0.5 { 255 } else { 0 };
     }
     ReconOut { rgba: out_rgba, cols: ncx, rows: ncy }
+}
+
+/// Two-stage packing on a regular even grid (mirrors
+/// detector.reconstruct.two_stage_pack).
+///
+/// Stage 1 (STRUCTURE): quantise to a small palette (adaptive K) and let each
+/// cell vote among the clean quantised labels -> crisp placement.
+/// Stage 2 (COLOUR): colour each cell from the ORIGINAL pixels carrying the
+/// winning label -> crisp lines AND accurate, un-clamped colours.
+pub fn two_stage_pack(rgba: &[u8], w: usize, h: usize, cols: usize, rows: usize,
+                      k_colors: usize) -> ReconOut {
+    let k_req = if k_colors > 0 {
+        k_colors
+    } else {
+        crate::kmeans::adaptive_k(rgba, w, h, 16, 48, 0.003)
+    };
+    let (labels, kc) = crate::kmeans::kmeans_labels(rgba, w, h, k_req);
+    let kc = kc.max(1);
+    let n = cols * rows;
+    let cw = w as f64 / cols as f64;
+    let ch = h as f64 / rows as f64;
+
+    let mut ixs = vec![0usize; w];
+    let mut wxs = vec![0f64; w];
+    for x in 0..w {
+        let ix = ((x * cols) / w).min(cols - 1);
+        ixs[x] = ix;
+        let fx = (x as f64 + 0.5 - ix as f64 * cw) / cw;
+        wxs[x] = 1.0 - 2.0 * (fx - 0.5).abs();
+    }
+    let mut iys = vec![0usize; h];
+    let mut wys = vec![0f64; h];
+    for y in 0..h {
+        let iy = ((y * rows) / h).min(rows - 1);
+        iys[y] = iy;
+        let fy = (y as f64 + 0.5 - iy as f64 * ch) / ch;
+        wys[y] = 1.0 - 2.0 * (fy - 0.5).abs();
+    }
+
+    // stage 1: winning label per cell (centre-weighted vote over labels)
+    let mut wsum = vec![0f64; n * kc];
+    for y in 0..h {
+        for x in 0..w {
+            let i = y * w + x;
+            let cell = iys[y] * cols + ixs[x];
+            let wgt = wys[y] * wxs[x] + 1e-4;
+            wsum[cell * kc + labels[i] as usize] += wgt;
+        }
+    }
+    let mut win = vec![0u32; n];
+    for c in 0..n {
+        let base = c * kc;
+        let mut bi = 0usize;
+        let mut bv = wsum[base];
+        for l in 1..kc {
+            if wsum[base + l] > bv {
+                bv = wsum[base + l];
+                bi = l;
+            }
+        }
+        win[c] = bi as u32;
+    }
+
+    // stage 2: colour from original pixels carrying the winning label
+    let mut csum = vec![[0f64; 3]; n];
+    let mut wden = vec![0f64; n];
+    let mut selcnt = vec![0f64; n];
+    let mut cnt = vec![0f64; n];
+    let mut msum = vec![[0f64; 3]; n];
+    let mut asum = vec![0f64; n];
+    for y in 0..h {
+        for x in 0..w {
+            let i = y * w + x;
+            let p = i * 4;
+            let cell = iys[y] * cols + ixs[x];
+            let wgt = wys[y] * wxs[x] + 1e-4;
+            let rgb = [
+                rgba[p] as f64 / 255.0,
+                rgba[p + 1] as f64 / 255.0,
+                rgba[p + 2] as f64 / 255.0,
+            ];
+            cnt[cell] += 1.0;
+            for c in 0..3 {
+                msum[cell][c] += rgb[c];
+            }
+            if rgba[p + 3] > 127 {
+                asum[cell] += 1.0;
+            }
+            if labels[i] == win[cell] {
+                selcnt[cell] += 1.0;
+                wden[cell] += wgt;
+                for c in 0..3 {
+                    csum[cell][c] += rgb[c] * wgt;
+                }
+            }
+        }
+    }
+
+    let mut out_rgba = vec![0u8; n * 4];
+    for c in 0..n {
+        let color = if selcnt[c] >= 0.5 && wden[c] > 1e-9 {
+            [csum[c][0] / wden[c], csum[c][1] / wden[c], csum[c][2] / wden[c]]
+        } else {
+            let cc = cnt[c].max(1.0);
+            [msum[c][0] / cc, msum[c][1] / cc, msum[c][2] / cc]
+        };
+        for ch in 0..3 {
+            out_rgba[c * 4 + ch] = pyround(color[ch] * 255.0).clamp(0.0, 255.0) as u8;
+        }
+        out_rgba[c * 4 + 3] = if asum[c] / cnt[c].max(1.0) > 0.5 { 255 } else { 0 };
+    }
+    ReconOut { rgba: out_rgba, cols, rows }
 }

@@ -1,5 +1,5 @@
 //! Feature maps: gray conversion, median quantization, derivative maps.
-//! Mirrors pixelfixer/autocorr.py (to_gray, median_quant, d1_along, d2_along).
+//! Mirrors detector/autocorr.py (to_gray, median_quant, d1_along, d2_along).
 
 /// Gray over white per alpha. rgba: interleaved u8, len = w*h*4.
 pub fn to_gray(rgba: &[u8], w: usize, h: usize) -> Vec<f32> {

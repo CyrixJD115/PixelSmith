@@ -1,6 +1,7 @@
 """Reconstruction: detected grid -> native-resolution pixel art.
 
-Lessons folded in from phase-aware cell pooling and from pixel-snapper:
+Lessons folded in from the ML branch's ColorNet (ml/dataset.py pool_cells)
+and from pixel-snapper:
 
   1. PHASE matters: pooling on a phase-0 uniform grid lets cells straddle
      pseudo-pixel boundaries and mixes colors. Estimate the grid phase per
@@ -244,6 +245,88 @@ def _warped_cell_index(w, h, xs_bands, x_edges, ys_bands, y_edges,
     return np.clip(ix, 0, ncx - 1), np.clip(iy, 0, ncy - 1)
 
 
+# ------------------------------------------------------ two-stage packing
+
+def adaptive_k(rgba: np.ndarray, lo: int = 16, hi: int = 48,
+               share: float = 0.003) -> int:
+    """Structure-only colour count from the image's complexity.
+
+    The quantisation in two-stage packing only has to SEPARATE regions for the
+    placement vote (the final colour comes from the original pixels), so K
+    should be generous. Count coarse (4-bit) colour bins holding >= `share` of
+    the opaque pixels - roughly how many meaningful regions the art has - and
+    clamp to [lo, hi]."""
+    rgb = rgba[:, :, :3].reshape(-1, 3).astype(np.int64)
+    if rgba.shape[2] == 4:
+        rgb = rgb[rgba[:, :, 3].reshape(-1) > 0]
+    if len(rgb) == 0:
+        return lo
+    key = ((rgb[:, 0] >> 4) << 8) | ((rgb[:, 1] >> 4) << 4) | (rgb[:, 2] >> 4)
+    cnt = np.bincount(key)
+    k = int((cnt / cnt.sum() >= share).sum())
+    return int(np.clip(k, lo, hi))
+
+
+def two_stage_pack(rgba: np.ndarray, cols: int, rows: int,
+                   k_colors: int = 0) -> np.ndarray:
+    """Two-stage reconstruction on a regular even grid.
+
+    Stage 1 (STRUCTURE): quantise the image to a small palette and let each
+    cell vote among the clean quantised LABELS - a crisp placement decision
+    (which region a cell belongs to), the source of pixel-snapper's clean
+    lines, but used only to decide placement.
+
+    Stage 2 (COLOUR): colour each cell from the ORIGINAL pixels carrying the
+    winning label (a centre-weighted mean of just those pixels). So a boundary
+    cell picks 'outline' cleanly, then gets the TRUE outline colour - crisp
+    lines AND accurate, un-clamped colours (rare colours survive).
+    """
+    from .quantize import kmeans_quantize
+    h, w = rgba.shape[:2]
+    K = k_colors if k_colors > 0 else adaptive_k(rgba)
+    _, labels, _ = kmeans_quantize(rgba, k=K)
+    lab = labels.reshape(-1).astype(np.int64)
+    K = int(lab.max()) + 1
+    n = cols * rows
+
+    rgb = rgba[:, :, :3].reshape(-1, 3).astype(np.float64) / 255.0
+    ix = np.clip((np.arange(w) * cols) // w, 0, cols - 1)
+    iy = np.clip((np.arange(h) * rows) // h, 0, rows - 1)
+    cell = (iy[:, None] * cols + ix[None, :]).ravel()
+
+    # triangular centre weight within each even cell
+    fx = (np.arange(w) + 0.5 - ix * (w / cols)) / (w / cols)
+    fy = (np.arange(h) + 0.5 - iy * (h / rows)) / (h / rows)
+    wx = 1.0 - 2.0 * np.abs(fx - 0.5)
+    wy = 1.0 - 2.0 * np.abs(fy - 0.5)
+    wgt = (wy[:, None] * wx[None, :]).ravel() + 1e-4
+
+    # stage 1: winning label per cell
+    comp = cell * K + lab
+    wsum = np.bincount(comp, weights=wgt, minlength=n * K).reshape(n, K)
+    win_label = np.argmax(wsum, axis=1)
+
+    # stage 2: colour from original pixels carrying the winning label
+    sel = (lab == win_label[cell])
+    wsel = wgt * sel
+    denom = np.maximum(np.bincount(cell, weights=wsel, minlength=n), 1e-9)
+    out = np.stack([np.bincount(cell, weights=rgb[:, c] * wsel, minlength=n)
+                    for c in range(3)], 1) / denom[:, None]
+    bad = np.bincount(cell, weights=sel.astype(float), minlength=n) < 0.5
+    if bad.any():
+        cnt = np.maximum(np.bincount(cell, minlength=n), 1)
+        mean = np.stack([np.bincount(cell, weights=rgb[:, c], minlength=n)
+                         for c in range(3)], 1) / cnt[:, None]
+        out[bad] = mean[bad]
+
+    low = np.clip(np.rint(out * 255), 0, 255).astype(np.uint8).reshape(rows, cols, 3)
+    if rgba.shape[2] == 4:
+        a = (rgba[:, :, 3].reshape(-1) > 127).astype(np.float64)
+        cnt = np.maximum(np.bincount(cell, minlength=n), 1)
+        mask = (np.bincount(cell, weights=a, minlength=n) / cnt > 0.5).reshape(rows, cols)
+        low = np.dstack([low, (mask * 255).astype(np.uint8)])
+    return low
+
 
 def reconstruct(rgba: np.ndarray, step_x: float, step_y: float,
                 cols: int, rows: int,
@@ -253,13 +336,17 @@ def reconstruct(rgba: np.ndarray, step_x: float, step_y: float,
                 color: str = "auto",
                 dark_stroke: bool = False,
                 std_thresh: float = 0.085) -> np.ndarray:
-    """Detected grid -> native pixel art (uint8 RGBA (rows, cols, 4)).
+    """Legacy grid-cut reconstructor (superseded by two_stage_pack).
 
-    color: "mode" (default-best: 5-bit binned local mode, center-weighted
-    votes, global bin means) | "cw" center-weighted mean | "auto" cw with
-    center-pixel for busy cells. dark_stroke: opt-in 1px-outline re-vote
-    (perceptual feature for AI mixels; hurts exact-GT metrics on jittered
-    synthetics because leaked outline pixels belong to neighbor cells)."""
+    Kept as the two_stage=False fallback: snaps per-axis cut lines to the
+    |d1| lattice, refines them into per-band warp polylines, then colours each
+    cell by a center-weighted 5-bit local mode. two_stage_pack is the default
+    server path; this remains for A/B and for the phase-locked synthetic case.
+
+    color: "mode" (5-bit binned local mode, center-weighted, global bin means)
+    | "cw" center-weighted mean | "auto" cw with center-pixel for busy cells.
+    dark_stroke: opt-in 1px-outline re-vote (helps AI mixels, hurts exact-GT
+    on jittered synthetics)."""
     h, w = rgba.shape[:2]
     sat = _Sat(rgba)
 
@@ -283,6 +370,8 @@ def reconstruct(rgba: np.ndarray, step_x: float, step_y: float,
     # picks per axis, so this can only match or beat the legacy grid.
     flat_x = np.zeros_like(prof_x)
     flat_y = np.zeros_like(prof_y)
+    # candidate cut sets per axis: snapped / phase-lattice / phase-0 lattice.
+    # The within-cell variance objective picks per axis.
     cand_x = [_snapped_cuts(prof_x, step_x, px, w, cols),
               _snapped_cuts(flat_x, step_x, px, w, cols),
               _snapped_cuts(flat_x, step_x, 0.0, w, cols)]
@@ -410,6 +499,7 @@ def reconstruct(rgba: np.ndarray, step_x: float, step_y: float,
             dark_col = _binned_mode(sel)
             ok = need & ~np.isnan(dark_col[:, 0])
             out[ok] = dark_col[ok]
+
     else:
         out = cw.copy()
         if color == "auto":

@@ -331,9 +331,9 @@ def local_count(maps, axis, extent, s0):
 
 # ---------------------------------------------------------------- detect
 def phase_count(maps, axis, extent, step):
-    """Cell count by unwrapped-phase span.
+    """Cell count by unwrapped-phase span (ported from the ML branch).
 
-    A phase-demodulation route to the output size, done classically: demodulate the
+    GridNet's key output-size idea, done classically: demodulate the
     boundary-energy profile at the detected frequency (Gabor window a few
     cells wide) to get a local phase theta(x) and coherence |C(x)|; unwrap
     with increment-relative branch selection (low-coherence noise then

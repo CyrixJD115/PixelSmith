@@ -215,3 +215,62 @@ pub fn kmeans_quantize_rgba(rgba: &[u8], w: usize, h: usize, k: usize) -> Vec<u8
     }
     out
 }
+
+/// Adaptive structure-only K from coarse (4-bit) colour complexity of the
+/// opaque pixels; mirrors detector.reconstruct.adaptive_k.
+pub fn adaptive_k(rgba: &[u8], w: usize, h: usize, lo: usize, hi: usize,
+                  share: f64) -> usize {
+    let mut cnt = vec![0u32; 4096];
+    let mut total = 0u64;
+    for i in 0..w * h {
+        if rgba[i * 4 + 3] > 0 {
+            let key = (((rgba[i * 4] >> 4) as usize) << 8)
+                | (((rgba[i * 4 + 1] >> 4) as usize) << 4)
+                | ((rgba[i * 4 + 2] >> 4) as usize);
+            cnt[key] += 1;
+            total += 1;
+        }
+    }
+    if total == 0 {
+        return lo;
+    }
+    let k = cnt.iter().filter(|&&c| c as f64 / total as f64 >= share).count();
+    k.clamp(lo, hi)
+}
+
+/// k-means (sample for centroids, then assign every pixel) -> (labels, K).
+/// Used by two-stage packing for the STRUCTURE quantisation.
+pub fn kmeans_labels(rgba: &[u8], w: usize, h: usize, k: usize) -> (Vec<u32>, usize) {
+    use rayon::prelude::*;
+    let n = w * h;
+    let opaque: Vec<usize> = (0..n).filter(|&i| rgba[i * 4 + 3] > 0).collect();
+    let src: Vec<usize> = if opaque.is_empty() { (0..n).collect() } else { opaque };
+    let sample_idx = even_sample(src.len(), 60_000);
+    let sample: Vec<[f32; 3]> = sample_idx
+        .iter()
+        .map(|&si| {
+            let i = src[si];
+            [rgba[i * 4] as f32, rgba[i * 4 + 1] as f32, rgba[i * 4 + 2] as f32]
+        })
+        .collect();
+    let k_eff = k.min(sample.len()).max(1);
+    let centers = kmeans(&sample, k_eff, 15, 0.5, 1, 42);
+    let kc = centers.len();
+    let labels: Vec<u32> = (0..n)
+        .into_par_iter()
+        .map(|i| {
+            let p = [rgba[i * 4] as f32, rgba[i * 4 + 1] as f32, rgba[i * 4 + 2] as f32];
+            let mut best = 0u32;
+            let mut bd = f32::INFINITY;
+            for (ci, c) in centers.iter().enumerate() {
+                let d = (p[0] - c[0]).powi(2) + (p[1] - c[1]).powi(2) + (p[2] - c[2]).powi(2);
+                if d < bd {
+                    bd = d;
+                    best = ci as u32;
+                }
+            }
+            best
+        })
+        .collect();
+    (labels, kc)
+}

@@ -1,4 +1,4 @@
-//! CellVarContrast "square packer" channel (pixelfixer/varcontrast.py),
+//! CellVarContrast "square packer" channel (detector/varcontrast.py),
 //! trimmed to what core.py's arbitration reads: the detrended z curve
 //! (scored_curve) exposed via z_of(step).
 

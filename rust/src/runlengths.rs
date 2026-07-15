@@ -1,5 +1,5 @@
 //! Grid detection from boundary-run statistics + robust soft-GCD lattice fit.
-//! Mirrors pixelfixer/runlengths.py exactly (see that file for the theory).
+//! Mirrors detector/runlengths.py exactly (see that file for the theory).
 //!
 //! Parallelism note: rayon is used only as ordered map -> sequential reduce,
 //! so every float accumulation happens in the reference order and results

@@ -1,7 +1,7 @@
 //! Lean fusion evidence + the four ACTIVE channels the full-mode arbiter
-//! reads: ray_e1, tile_e1, tile_e2, spec_e1. Mirrors pixelfixer/fusion.py
+//! reads: ray_e1, tile_e1, tile_e2, spec_e1. Mirrors detector/fusion.py
 //! build_evidence(lean=True) + channel_matrix(only=ACTIVE) + fused_curve,
-//! with the supporting pieces from pixelfixer/channels.py.
+//! with the supporting pieces from detector/channels.py.
 
 use crate::kmeans::kmeans_quantize_rgba;
 use crate::sigproc::*;

@@ -1,5 +1,5 @@
 //! Grid detection via banded autocorrelation + cepstrum. Mirrors
-//! pixelfixer/autocorr.py (axis_estimate, local_count, detect).
+//! detector/autocorr.py (axis_estimate, local_count, detect).
 //!
 //! Feature maps are pre-oriented: every map is row-major (lines x extent)
 //! with the scan axis horizontal, so the y-axis maps arrive transposed.

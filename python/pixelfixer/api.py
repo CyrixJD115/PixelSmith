@@ -1,13 +1,13 @@
 """Server entry point: one call, bytes in, pixel art out.
 
-    from pixelfixer.api import process
+    from detector.api import process
     result = process(image_bytes)                     # full quality
     result = process(image_bytes, mode="fast")        # bounded latency
     result = process(image_bytes, low_memory=True)    # tight containers
 
 Engineered for server use: input caps, explicit frees, no globals, no
-temp files, everything self-contained in the pixelfixer package (numpy +
-scipy + cv2 + PIL only).
+temp files, everything self-contained inside detector/ (numpy + scipy +
+cv2 + PIL only).
 
 result dict:
     cols, rows            predicted native resolution
@@ -49,6 +49,7 @@ def _load(image) -> np.ndarray:
 
 def process(image, mode: str = "full", low_memory: bool = False,
             dark_stroke: bool = False, palette_snap: bool = False,
+            two_stage: bool = True, k_colors: int = 0,
             force_step: float | None = None,
             return_png: bool = True) -> dict:
     """image: PNG/JPG bytes or uint8 ndarray. See module docstring."""
@@ -61,7 +62,7 @@ def process(image, mode: str = "full", low_memory: bool = False,
                          f"{MAX_PIXELS/1e6:.0f}MP limit)")
 
     from .core import detect
-    from .reconstruct import reconstruct
+    from .reconstruct import reconstruct, two_stage_pack
 
     t0 = time.time()
     if force_step:
@@ -74,9 +75,14 @@ def process(image, mode: str = "full", low_memory: bool = False,
     detect_s = time.time() - t0
 
     t0 = time.time()
-    low = reconstruct(rgba, r["step_x"], r["step_y"], r["cols"], r["rows"],
-                      color="mode", palette_snap=palette_snap,
-                      dark_stroke=dark_stroke)
+    if two_stage:
+        # default: quantise-for-structure + original-pixels-for-colour on a
+        # regular even grid (crisp lines, accurate colours, no palette loss)
+        low = two_stage_pack(rgba, r["cols"], r["rows"], k_colors=k_colors)
+    else:
+        low = reconstruct(rgba, r["step_x"], r["step_y"], r["cols"], r["rows"],
+                          color="mode", palette_snap=palette_snap,
+                          dark_stroke=dark_stroke)
     recon_s = time.time() - t0
 
     consensus = str(r.get("consensus", ""))

@@ -1,4 +1,4 @@
-//! Banded autocorrelation / cepstrum machinery. Mirrors pixelfixer/autocorr.py
+//! Banded autocorrelation / cepstrum machinery. Mirrors detector/autocorr.py
 //! (band_profiles, band_acf, band_cepstrum, comb scores, train_quality,
 //! refine_step_acf, ceps_score).
 
