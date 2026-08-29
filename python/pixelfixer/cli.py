@@ -1,9 +1,9 @@
 """Command-line interface for the pixelfixer detector.
 
-  python -m detector.cli input.png                 # print detection JSON
-  python -m detector.cli input.png --overlay g.png # save grid overlay
-  python -m detector.cli input.png --extract e.png # save reconstruction
-  python -m detector.cli somefolder --json out.json
+  python -m pixelfixer.cli input.png                 # print detection JSON
+  python -m pixelfixer.cli input.png --overlay g.png # save grid overlay
+  python -m pixelfixer.cli input.png --extract e.png # save reconstruction
+  python -m pixelfixer.cli somefolder --json out.json
 """
 import argparse
 import glob
@@ -15,8 +15,9 @@ import time
 import numpy as np
 from PIL import Image
 
-sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
-from detector import detect
+from . import detect
+from .reconstruct import reconstruct
+from .quantize import kmeans_quantize
 
 
 def _overlay(rgba, r):
@@ -31,14 +32,12 @@ def _overlay(rgba, r):
 
 
 def _extract(rgba, r, dark_stroke=False):
-    from detector.reconstruct import reconstruct
     return reconstruct(rgba, r["step_x"], r["step_y"], r["cols"], r["rows"],
                        color="mode", palette_snap=False,
                        dark_stroke=dark_stroke)
 
 
 def _extract_legacy(rgba, r):
-    from detector.quantize import kmeans_quantize
     h, w = rgba.shape[:2]
     cols, rows = r["cols"], r["rows"]
     _q, labels, centers = kmeans_quantize(rgba, k=24)

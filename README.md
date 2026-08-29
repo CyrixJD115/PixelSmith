@@ -121,6 +121,7 @@ Full methodology, per-category tables, and reproduction instructions live in the
 
 - [Accuracy](#accuracy)
 - [Usage](#usage)
+  - [Starter scripts](#starter-scripts)
   - [Python](#python)
   - [Rust](#rust)
   - [Options and output](#options-and-output)
@@ -140,13 +141,47 @@ Two implementations live in this repository. They produce the same answers; pick
 by context.
 
 - **[`python/`](python/)** is the reference: clearest to read, easiest to hack
-  on and extend.
+  on and extend. Published to PyPI as `pixelfixer`.
 - **[`rust/`](rust/)** is the native core: one dependency-free binary, 11-24x
   faster, for servers and batch jobs.
 
+### Starter scripts
+
+From the repo root — the only prerequisite is [uv](https://docs.astral.sh/uv/)
+(for the Python side) and/or a Rust toolchain (for `--rust`):
+
+```bash
+python run.py examples/frog.png                                # --uv (default): uv-managed env, raw source
+python run.py --python -- examples/frog.png --extract out.png  # your current interpreter
+python run.py --rust  -- process examples/frog.png out.png     # cargo run --release
+
+python build.py --uv     # build the PyPI package (sdist + wheel) -> python/dist/
+python build.py --rust   # build the Rust binary -> rust/target/release/pixelfixer
+python build.py --clean  # remove all build artifacts
+```
+
+`./build.sh` is a thin wrapper: `./build.sh --uv` == `python build.py --uv`.
+Everything after `--` is passed straight to the underlying tool, and paths
+resolve from your current directory.
+
+Or skip the checkout entirely and install the published package (Python 3.9+):
+
+```bash
+uv tool install pixelfixer    # or: pip install pixelfixer
+pixelfixer input.png --extract out.png
+```
+
 ### Python
 
-Requires Python 3.9+ and `numpy`, `scipy`, `opencv-python`, and `Pillow`.
+Requires Python 3.9+ and `numpy`, `scipy`, `opencv-python`, and `Pillow`. With
+uv (recommended) the interpreter and dependencies are managed for you:
+
+```bash
+cd python
+uv run python -m pixelfixer.cli ../examples/frog.png   # creates .venv on first run
+```
+
+Or with plain pip:
 
 ```bash
 cd python
@@ -188,13 +223,15 @@ result = process(png_or_jpeg_bytes, mode="fast")  # bounded latency
 
 ### Rust
 
-Requires a stable Rust toolchain. No system libraries, no OpenCV, nothing to
-install beyond `cargo`.
+Requires a stable Rust toolchain (Linux, macOS, or Windows). No system
+libraries, no OpenCV, nothing to install beyond `cargo`.
 
 ```bash
 cd rust
 cargo build --release        # -> target/release/pixelfixer
 ```
+
+Or from the repo root: `python run.py --rust -- process examples/frog.png out.png`.
 
 ```bash
 # detect + reconstruct, writing the fixed image

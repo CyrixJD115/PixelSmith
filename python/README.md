@@ -6,21 +6,34 @@ hack on, and extend.
 
 ## Install
 
-Requires Python 3.9+.
+Requires Python 3.9+. [uv](https://docs.astral.sh/uv/) is the recommended
+workflow — it manages the interpreter and dependencies for you:
 
 ```bash
-pip install -r requirements.txt        # numpy, scipy, opencv-python, Pillow
+uv run python -m pixelfixer.cli input.png   # one-off run; uv creates .venv
+uv sync --dev                               # persistent dev environment
+uv run pytest                               # smoke tests
+uv build                                    # sdist + wheel -> dist/
 ```
 
-Or install the package (adds a `pixelfixer` command):
+Install as a CLI tool (adds the `pixelfixer` command):
 
 ```bash
-pip install -e .
+uv tool install pixelfixer    # from PyPI
+uv tool install .             # from this checkout
+```
+
+Plain pip works too:
+
+```bash
+pip install -r requirements.txt   # dependencies only
+pip install -e .                  # dependencies + `pixelfixer` command
 ```
 
 ## Command line
 
 ```bash
+pixelfixer input.png                                 # installed entry point
 python -m pixelfixer.cli input.png                    # print detection JSON
 python -m pixelfixer.cli input.png --extract out.png  # write the fixed pixel art
 python -m pixelfixer.cli input.png --overlay grid.png # write a grid overlay

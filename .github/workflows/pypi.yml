@@ -1,0 +1,85 @@
+# Publish the Python `pixelfixer` package to PyPI.
+#
+# Trigger: publishing a GitHub Release (tag must be `v<version>`, matching
+# python/pyproject.toml — the verify step below enforces this).
+#
+# Publishing uses PyPI trusted publishing (GitHub OIDC), so no API token is
+# stored in repo secrets. One-time PyPI setup (per project):
+#   1. https://pypi.org/manage/account/publishing/ -> "Add a new pending publisher"
+#      - PyPI project name: pixelfixer
+#      - owner: <github org/user>, repository: <this repo>
+#      - workflow name: pypi.yml, environment: pypi
+#   2. In this repo: Settings -> Environments -> create `pypi`.
+#
+# Only the Python package is published. The Rust crate is never published
+# to crates.io.
+name: Publish to PyPI
+
+on:
+  release:
+    types: [published]
+  workflow_dispatch: # manual dry-run: build + test only, no publish
+
+permissions:
+  contents: read
+
+jobs:
+  build:
+    name: Test & build
+    runs-on: ubuntu-latest
+    defaults:
+      run:
+        working-directory: python
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Install uv
+        uses: astral-sh/setup-uv@v5
+        with:
+          enable-cache: true
+
+      - name: Run tests
+        run: |
+          uv sync --dev
+          uv run pytest -v
+
+      - name: Verify tag matches package version
+        if: github.event_name == 'release'
+        run: |
+          uv run python - <<'EOF'
+          import os, tomllib
+          tag = os.environ["GITHUB_REF_NAME"].lstrip("v")
+          with open("pyproject.toml", "rb") as f:
+              version = tomllib.load(f)["project"]["version"]
+          if tag != version:
+              raise SystemExit(f"release tag v{tag} does not match pyproject version {version}")
+          print(f"tag matches package version {version}")
+          EOF
+
+      - name: Build sdist and wheel
+        run: uv build
+
+      - name: Upload artifacts
+        uses: actions/upload-artifact@v4
+        with:
+          name: dist
+          path: python/dist/*
+          if-no-files-found: error
+
+  publish:
+    name: Publish to PyPI
+    needs: build
+    if: github.event_name == 'release'
+    runs-on: ubuntu-latest
+    environment: pypi
+    permissions:
+      id-token: write # OIDC token for PyPI trusted publishing
+    steps:
+      - name: Download artifacts
+        uses: actions/download-artifact@v4
+        with:
+          name: dist
+          path: dist
+
+      - name: Publish to PyPI
+        uses: pypa/gh-action-pypi-publish@release/v1

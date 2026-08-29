@@ -1,6 +1,6 @@
 # pixelfixer (Rust server core)
 
-Native port of the production detector (`detector/`) — both modes — built
+Native port of the production detector (`python/pixelfixer/`) — both modes — built
 for the server: low latency, low memory, zero interpreter startup. The
 Python package stays as the numerical reference; every Rust module is
 verified against it on the 27 user-truth bench images before it counts as
@@ -9,10 +9,11 @@ ported.
 ## Build
 
 ```
-cargo build --release        # -> target/release/pixelfixer.exe
+cargo build --release        # -> target/release/pixelfixer
 ```
 
-Toolchain: stable Rust, `x86_64-pc-windows-gnu` (no VS Build Tools needed).
+Or from the repo root: `python build.py --rust` / `python run.py --rust -- <args>`.
+Toolchain: stable Rust (Linux, macOS, or Windows).
 Deps: `image` (PNG/JPEG), `rustfft`, `rayon`.
 
 ## Commands
@@ -97,12 +98,12 @@ is NOT enough. The port matches numpy/Python semantics exactly:
 ## Verification harness
 
 ```
-python verify_autocorr.py     # module vs detector/autocorr.py
-python verify_runlengths.py   # module vs detector/runlengths.py
+python verify_autocorr.py     # module vs python/pixelfixer/autocorr.py
+python verify_runlengths.py   # module vs python/pixelfixer/runlengths.py
 python verify_fast.py         # selfsim + core fast path vs Python
 python verify_full.py         # full-mode core vs Python + truth scoring
 python verify_recon.py        # reconstruct vs Python, pixel-exact
 python bench_compare.py       # wall time + peak RSS head-to-head
 ```
 
-Run from the repo root (they import `detector/` and `tools/bench_common`).
+Run from the repo root (they import `python/pixelfixer/` and `tools/bench_common`).

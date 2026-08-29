@@ -9,6 +9,11 @@ dist/
 venv/
 .pytest_cache/
 
+# uv / packaging
+# python/.python-version and python/uv.lock are intentionally tracked
+# for reproducible dev environments; everything else uv generates
+# (.venv, dist) is ignored above.
+
 # Rust
 /rust/target/
 **/*.rs.bk

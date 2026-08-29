@@ -1,16 +1,27 @@
 [build-system]
-requires = ["setuptools>=61"]
+requires = ["setuptools>=77"]
 build-backend = "setuptools.build_meta"
 
 [project]
 name = "pixelfixer"
-version = "0.1.0"
+version = "1.1.0"
 description = "Convert fake pixel art into real, grid-aligned pixel art (image processing, no model)."
 readme = "README.md"
 requires-python = ">=3.9"
-license = { text = "MIT" }
+license = "MIT"
 authors = [{ name = "Astropulse, LLC" }]
 keywords = ["pixel art", "image processing", "grid detection", "downscaling", "retro diffusion"]
+classifiers = [
+    "Intended Audience :: Developers",
+    "Operating System :: OS Independent",
+    "Programming Language :: Python :: 3",
+    "Programming Language :: Python :: 3.9",
+    "Programming Language :: Python :: 3.10",
+    "Programming Language :: Python :: 3.11",
+    "Programming Language :: Python :: 3.12",
+    "Programming Language :: Python :: 3.13",
+    "Topic :: Multimedia :: Graphics :: Graphics Conversion",
+]
 dependencies = [
     "numpy>=1.21",
     "scipy>=1.7",
@@ -25,5 +36,14 @@ Homepage = "https://retrodiffusion.ai"
 [project.scripts]
 pixelfixer = "pixelfixer.cli:main"
 
+[dependency-groups]
+dev = [
+    "pytest>=8",
+    "build>=1.2",
+]
+
 [tool.setuptools]
 packages = ["pixelfixer"]
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]

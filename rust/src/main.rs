@@ -1,6 +1,7 @@
 use pixelfixer::{autocorr, core, reconstruct, runlengths, selfsim};
 
-/// Peak working-set size (bytes) of this process, via psapi.
+/// Peak working-set size (bytes) of this process.
+#[cfg(windows)]
 fn peak_rss() -> u64 {
     #[repr(C)]
     struct Pmc {
@@ -29,6 +30,26 @@ fn peak_rss() -> u64 {
             0
         }
     }
+}
+
+/// Peak RSS (bytes) from /proc/self/status `VmHWM`.
+#[cfg(target_os = "linux")]
+fn peak_rss() -> u64 {
+    if let Ok(status) = std::fs::read_to_string("/proc/self/status") {
+        for line in status.lines() {
+            if let Some(rest) = line.strip_prefix("VmHWM:") {
+                let kb: u64 = rest.trim().trim_end_matches("kB").trim().parse().unwrap_or(0);
+                return kb * 1024;
+            }
+        }
+    }
+    0
+}
+
+/// Peak RSS unavailable without libc; report 0.
+#[cfg(not(any(windows, target_os = "linux")))]
+fn peak_rss() -> u64 {
+    0
 }
 
 fn main() {
